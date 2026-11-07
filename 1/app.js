@@ -24,3 +24,7 @@ console.log("Base Name:", path.basename(__filename));
 console.log("Extension Name:", path.extname(__filename));
 console.log("Parsed Path:", path.parse(__filename));
 console.log("Joined Path:", path.join(__dirname, "test", "file.txt"));
+
+const Logger = logger.printLogger;
+const printLogger = new Logger();
+printLogger.log("message");

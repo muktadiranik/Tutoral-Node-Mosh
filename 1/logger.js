@@ -1,4 +1,5 @@
 var url = "https://api.example.com/log";
+const EventEmitter = require("events");
 
 function log(message) {
   console.log(message);
@@ -16,11 +17,14 @@ module.exports.mul = mul;
 module.exports.div = div;
 module.exports.url = url;
 
-function print(message) {
-  console.log(message);
+class Logger extends EventEmitter {
+  log(message) {
+    console.log(message);
+    this.emit("message logged", { id: 1, message });
+  }
 }
 
-module.exports.print = print;
+module.exports.printLogger = Logger;
 
 (function (exports, require, module, __filename, __dirname) {
   console.log(exports);
