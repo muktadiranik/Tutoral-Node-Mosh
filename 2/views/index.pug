@@ -1,0 +1,20 @@
+doctype html
+html
+    head
+        title= title
+    body
+        h1= title
+        p= content
+        table
+            thead
+                tr
+                    th(scope="col") ID
+                    th(scope="col") Course name
+            tbody
+                each course in courses
+                    tr
+                        td= course.id
+                        td= course.name
+                else
+                    tr
+                        td(colspan="2") No courses available.
