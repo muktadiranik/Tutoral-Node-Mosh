@@ -1,6 +1,21 @@
 {
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "start:vidly": "node vidly/index.js",
+    "test": "node --test"
+  },
   "dependencies": {
+    "config": "^5.0.1",
+    "debug": "^4.4.3",
     "express": "^5.3.0",
+    "helmet": "^8.3.0",
+    "joi": "^18.3.2",
+    "morgan": "^1.12.1",
+    "pug": "^3.0.4"
+  },
+  "devDependencies": {
+    "@types/morgan": "^1.9.10",
     "nodemon": "^3.1.14"
   }
 }

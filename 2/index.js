@@ -1,14 +1,20 @@
+const path = require("node:path");
+
+if (!process.env.NODE_CONFIG_DIR) {
+  process.env.NODE_CONFIG_DIR = path.join(__dirname, "config");
+}
+
 const config = require("config");
 const express = require("express");
-const path = require("node:path");
 const morgan = require("morgan");
 const startupDebugger = require("debug")("app:startup");
 const dbDebugger = require("debug")("app:db");
-const { startup, authenticate } = require("./logger");
-const { default: helmet } = require("helmet");
+const { startup, authenticate } = require("./middleware/logger");
+const helmet = require("helmet");
 const app = express();
 
-const router = require("./routes/courses");
+const coursesRouter = require("./routes/courses");
+const homeRouter = require("./routes/home");
 
 console.log(`Application Name: ${config.get("name")}`);
 
@@ -27,14 +33,19 @@ if (app.get("env") === "development") {
   dbDebugger("morgan is running");
   console.log("morgan is running");
 }
-app.use(express.static("public"));
+app.use(express.static(path.join(__dirname, "public")));
 
 app.use(startup);
 app.use(authenticate);
-app.use(router);
+app.use("/api/courses", coursesRouter);
+app.use("/", homeRouter);
 
-const port = process.env.PORT || 3000;
+if (require.main === module) {
+  const port = process.env.PORT || 3000;
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
+  app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+  });
+}
+
+module.exports = app;

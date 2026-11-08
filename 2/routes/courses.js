@@ -1,24 +1,13 @@
 const express = require("express");
 const Joi = require("joi");
 const router = express.Router();
-const coursesRouter = express.Router();
+const courses = require("../data/courses");
+
+let nextCourseId = Math.max(0, ...courses.map((course) => course.id)) + 1;
 
 const schema = Joi.object({
   name: Joi.string().min(3).required(),
 }).required();
-
-const courses = [
-  { id: 1, name: "C" },
-  { id: 2, name: "C++" },
-  { id: 3, name: "C#" },
-  { id: 4, name: "Java" },
-  { id: 5, name: "Python" },
-  { id: 6, name: "JavaScript" },
-  { id: 7, name: "React" },
-  { id: 8, name: "Angular" },
-  { id: 9, name: "Node.js" },
-  { id: 10, name: "Express.js" },
-];
 
 function validateCourse(req, res, next) {
   const { error, value } = schema.validate(req.body);
@@ -31,15 +20,7 @@ function validateCourse(req, res, next) {
   next();
 }
 
-router.get("/", (req, res) => {
-  res.render("index", {
-    title: "My First Pug Template",
-    content: "Welcome to my first Pug template",
-    courses,
-  });
-});
-
-coursesRouter.param("id", (req, res, next, id) => {
+router.param("id", (req, res, next, id) => {
   const course = courses.find((c) => c.id === Number(id));
 
   if (!course) {
@@ -50,31 +31,31 @@ coursesRouter.param("id", (req, res, next, id) => {
   next();
 });
 
-coursesRouter.get("/", (req, res) => {
+router.get("/", (req, res) => {
   res.send(courses);
 });
 
-coursesRouter.get("/:id", (req, res) => {
+router.get("/:id", (req, res) => {
   res.send(req.course);
 });
 
-coursesRouter.post("/", validateCourse, (req, res) => {
+router.post("/", validateCourse, (req, res) => {
   const course = {
-    id: courses.length + 1,
+    id: nextCourseId++,
     name: req.body.name,
   };
   courses.push(course);
   res.status(201).send(course);
 });
 
-coursesRouter.put("/:id", validateCourse, (req, res) => {
+router.put("/:id", validateCourse, (req, res) => {
   const course = req.course;
 
   course.name = req.body.name;
   res.status(200).send(course);
 });
 
-coursesRouter.delete("/:id", (req, res) => {
+router.delete("/:id", (req, res) => {
   const course = req.course;
 
   const index = courses.indexOf(course);
@@ -82,7 +63,5 @@ coursesRouter.delete("/:id", (req, res) => {
 
   res.status(200).send(course);
 });
-
-router.use("/api/courses", coursesRouter);
 
 module.exports = router;
