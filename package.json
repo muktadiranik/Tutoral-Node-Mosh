@@ -1,12 +1,6 @@
 {
   "dependencies": {
-    "config": "^5.0.1",
-    "helmet": "^8.3.0",
-    "joi": "^18.3.2",
-    "morgan": "^1.12.1",
-    "pug": "^3.0.4"
-  },
-  "devDependencies": {
-    "@types/morgan": "^1.9.10"
+    "express": "^5.3.0",
+    "nodemon": "^3.1.14"
   }
 }
