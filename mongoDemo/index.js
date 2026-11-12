@@ -11,24 +11,26 @@ mongoose
 
 const courseSchema = new mongoose.Schema({
   name: { type: String, required: true, minlength: 5, maxlength: 255 },
-  author: { type: String, required: true, enum: ["Mosh", "John", "Hamedani"] },
-  tags: [
-    {
-      isAsync: true,
-      type: Array,
-      validate: {
-        validator: function (value, callback) {
-          setTimeout(() => {
-            const result = value && value.length > 0;
-            console.log("Async operation inside validation");
-          }, 1000);
-          callback(result);
-          return value && value.length > 0;
-        },
-        message: "A course should have at least one tag",
+  author: {
+    type: String,
+    required: true,
+    enum: ["Mosh", "John", "Hamedani"],
+    lowercase: true,
+    uppercase: false,
+    trim: true,
+  },
+  tags: {
+    type: String,
+    required: true,
+    validate: {
+      validator: async function (value) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        console.log("Async operatoin inside validation");
+        return Array.isArray(value) && value.length > 0;
       },
+      message: "A course should have at least one tag",
     },
-  ],
+  },
   date: { type: Date, default: Date.now },
   isPublished: { type: Boolean, required: true },
   price: {
@@ -38,6 +40,8 @@ const courseSchema = new mongoose.Schema({
     },
     min: 1,
     max: 5000,
+    get: (value) => Math.round(value),
+    set: (value) => Math.round(value),
   },
 });
 
@@ -162,7 +166,7 @@ async function createCourse() {
   }
 }
 
-// createCourse();
+createCourse();
 
 async function getCourses() {
   // eq (equal)

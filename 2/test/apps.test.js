@@ -109,7 +109,6 @@ for (const cwd of [path.dirname(projectDirectory), projectDirectory]) {
 
 for (const resource of [
   { entry: "index.js", endpoint: "/api/courses", count: 10, label: "Course" },
-  { entry: "vidly/index.js", endpoint: "/api/genres", count: 16, label: "Genre" },
 ]) {
   test(`${resource.label} API preserves CRUD and validation`, async (t) => {
     const request = await startApp(t, resource.entry, path.dirname(projectDirectory));

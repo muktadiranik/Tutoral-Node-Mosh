@@ -3,6 +3,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "start:vidly": "node vidly/index.js",
+    "seed:vidly": "node vidly/seed.js",
     "test": "node --test"
   },
   "dependencies": {
@@ -12,6 +13,7 @@
     "helmet": "^8.3.0",
     "joi": "^18.3.2",
     "morgan": "^1.12.1",
+    "mongoose": "^9.12.1",
     "pug": "^3.0.4"
   },
   "devDependencies": {
