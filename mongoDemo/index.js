@@ -10,12 +10,35 @@ mongoose
   });
 
 const courseSchema = new mongoose.Schema({
-  name: String,
-  author: String,
-  tags: [String],
+  name: { type: String, required: true, minlength: 5, maxlength: 255 },
+  author: { type: String, required: true, enum: ["Mosh", "John", "Hamedani"] },
+  tags: [
+    {
+      isAsync: true,
+      type: Array,
+      validate: {
+        validator: function (value, callback) {
+          setTimeout(() => {
+            const result = value && value.length > 0;
+            console.log("Async operation inside validation");
+          }, 1000);
+          callback(result);
+          return value && value.length > 0;
+        },
+        message: "A course should have at least one tag",
+      },
+    },
+  ],
   date: { type: Date, default: Date.now },
-  isPublished: Boolean,
-  price: Number,
+  isPublished: { type: Boolean, required: true },
+  price: {
+    type: Number,
+    required: function () {
+      return this.isPublished;
+    },
+    min: 1,
+    max: 5000,
+  },
 });
 
 const Course = mongoose.model("Course", courseSchema);
@@ -100,20 +123,43 @@ async function createCourse() {
     isPublished: true,
     price: 550,
   });
+  try {
+    const courseArray = [
+      course1,
+      course2,
+      course3,
+      course4,
+      course5,
+      course6,
+      course7,
+      course8,
+      course9,
+      course10,
+    ];
 
-  const result = await Course.insertMany([
-    course1,
-    course2,
-    course3,
-    course4,
-    course5,
-    course6,
-    course7,
-    course8,
-    course9,
-    course10,
-  ]);
-  console.log(result);
+    for (const course of courseArray) {
+      await course.validate();
+    }
+
+    const result = await Course.insertMany([
+      course1,
+      course2,
+      course3,
+      course4,
+      course5,
+      course6,
+      course7,
+      course8,
+      course9,
+      course10,
+    ]);
+    console.log(result);
+  } catch (ex) {
+    console.log(ex.message);
+    for (field in ex.errors) {
+      console.log(ex.errors[field].message);
+    }
+  }
 }
 
 // createCourse();
@@ -281,3 +327,49 @@ async function removeCourseFindOneAndDelete(id) {
 }
 
 removeCourseFindOneAndDelete("6af4ede821a762f55fadd9b9");
+
+const random = new Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 0]);
+
+for (const element of random) {
+  console.log(element);
+}
+
+const randomObject = [
+  {
+    id: 1,
+    name: "Mosh",
+  },
+  {
+    id: 2,
+    name: "Hamedani",
+  },
+  {
+    id: 3,
+    name: "Hamedani",
+  },
+  {
+    id: 4,
+    name: "Hamedani",
+  },
+  {
+    id: 5,
+    name: "Hamedani",
+  },
+  {
+    id: 6,
+    name: "Hamedani",
+  },
+  {
+    id: 7,
+    name: "Hamedani",
+  },
+  {
+    id: 8,
+    name: "Hamedani",
+  },
+];
+
+for (const key in randomObject) {
+  const element = object[key];
+  console.log(element);
+}
