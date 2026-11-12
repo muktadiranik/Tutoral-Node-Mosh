@@ -63,7 +63,7 @@ test("Vidly imports work without a circular dependency or database side effects"
 
   const router = require("../vidly/routes/genres");
   const app = require("../vidly");
-  const seed = require("../vidly/seed");
+  const seed = require("../vidly/seed-genres");
 
   assert.equal(typeof router, "function");
   assert.equal(typeof app.listen, "function");
@@ -213,7 +213,7 @@ test("Explicit genre seeding strips numeric IDs and closes its connection (mocke
     return genres;
   });
   t.mock.method(console, "log", () => {});
-  const seed = require("../vidly/seed");
+  const seed = require("../vidly/seed-genres");
 
   await seed();
   assert.equal(connect.mock.calls[0].arguments[0],

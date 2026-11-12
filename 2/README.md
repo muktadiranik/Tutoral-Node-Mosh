@@ -11,6 +11,7 @@ npm start
 - `npm run dev`: restart the course app automatically while editing.
 - `npm run start:vidly`: Vidly genre API at `http://localhost:3000/api/genres`.
 - `npm run seed:vidly`: insert the 16 sample genres into MongoDB (optional).
+- `npm run seed:customers`: insert 10 sample customers into MongoDB (optional).
 - `npm test`: check imports, validation, CRUD, shared data, and page rendering.
 
 Both apps default to port 3000. Run one at a time or set `PORT` to a different
@@ -28,8 +29,11 @@ database. Vidly waits for the database connection before accepting requests.
 The shared `vidly/models/genre.js` exports the Mongoose model. Both the routes
 and the seed script import it directly, without importing the application.
 Importing `vidly/index.js` does not connect to MongoDB or insert seed data.
-The seed command inserts a new batch every time it runs, so only run it when
-you want to add sample data.
+Each seed command inserts a new batch every time it runs, so only run it when
+you want to add sample data. The customer seed script uses
+`vidly/data/customers.js` and the existing `vidly/models/customer.js` model,
+including names, gold membership flags, and fictional phone numbers. It uses
+the same `MONGODB_URI` setting as the genre seed and disconnects when finished.
 
 ### Genre API
 

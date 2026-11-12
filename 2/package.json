@@ -3,7 +3,8 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "start:vidly": "node vidly/index.js",
-    "seed:vidly": "node vidly/seed.js",
+    "seed:vidly": "node vidly/seed-genres.js",
+    "seed:customers": "node vidly/seed-customers.js",
     "test": "node --test"
   },
   "dependencies": {

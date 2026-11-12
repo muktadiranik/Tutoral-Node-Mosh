@@ -1,10 +1,12 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const genresRouter = require("./routes/genres");
+const customersRouter = require("./routes/customers");
 
 const app = express();
 app.use(express.json());
 app.use("/api/genres", genresRouter);
+app.use("/api/customers", customersRouter);
 
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
