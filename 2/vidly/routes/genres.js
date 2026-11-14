@@ -1,23 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const router = express.Router();
-const Joi = require("joi");
-const Genre = require("../models/genre");
-
-const schema = Joi.object({
-  name: Joi.string().trim().min(5).max(255).required(),
-}).required();
-
-const validateGenre = function (req, res, next) {
-  const { error, value } = schema.validate(req.body);
-
-  if (error) {
-    return res.status(400).send(error.details[0].message);
-  }
-
-  req.body = value;
-  next();
-};
+const { Genre, validateGenre } = require("../models/genre");
 
 router.param("id", (req, res, next, id) => {
   if (!mongoose.isObjectIdOrHexString(id)) {
