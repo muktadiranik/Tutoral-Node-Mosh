@@ -33,3 +33,4 @@ Genre.validateGenre = validateGenre;
 
 module.exports = Genre;
 module.exports.validateGenre = validateGenre;
+module.exports.genreSchema = genreSchema;

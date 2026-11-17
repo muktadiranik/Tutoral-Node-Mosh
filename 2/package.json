@@ -5,6 +5,7 @@
     "start:vidly": "node vidly/index.js",
     "seed:vidly": "node vidly/seed-genres.js",
     "seed:customers": "node vidly/seed-customers.js",
+    "seed:movies": "node vidly/seed-movies.js",
     "test": "node --test"
   },
   "dependencies": {
