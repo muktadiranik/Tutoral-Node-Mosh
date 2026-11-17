@@ -13,6 +13,7 @@ npm start
 - `npm run seed:vidly`: insert the 16 sample genres into MongoDB (optional).
 - `npm run seed:customers`: insert 10 sample customers into MongoDB (optional).
 - `npm run seed:movies`: insert 10 sample movies using existing genres (optional).
+- `npm run seed:rentals`: insert 10 sample rental records without changing stock (optional).
 - `npm test`: check imports, validation, CRUD, shared data, and page rendering.
 
 Both apps default to port 3000. Run one at a time or set `PORT` to a different
@@ -41,6 +42,20 @@ name. Run `npm run seed:vidly` before `npm run seed:movies` in the same database
 If a required genre is missing, no movies are inserted and the script reports
 the missing names. It uses the same `MONGODB_URI` setting, disconnects when
 finished, and adds another batch of movies on each successful run.
+
+The rental seed uses the model-shaped samples in `vidly/data/rentals.js`.
+It finds existing customers by `phone` and movies by `movie.title`, then copies
+their current fields and movie IDs into sample rental records. Seed customers
+and movies first, using the same `MONGODB_URI`. Missing records stop the script
+before insertion. `dateOut` defaults to now, `dateReturned` to null, and
+`rentalFee` starts at 0.
+
+This is a seed-only operation: it does not reserve stock, update movies, or
+use transactions, so it works with standalone MongoDB like the other seeds.
+Each successful run adds another 10 records. It does not clear existing data
+and disconnects when finished. This does not change `POST /api/rentals`, which
+still updates stock transactionally and requires a replica set or sharded
+cluster. Sample rental records are not inventory reservations.
 
 ### Genre API
 
