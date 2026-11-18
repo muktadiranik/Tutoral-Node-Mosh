@@ -7,7 +7,7 @@ const { Customer } = require("../vidly/models/customer");
 const { Movie } = require("../vidly/models/movie");
 
 // Exercise HTTP handlers and real schemas without connecting to MongoDB.
-// Transaction rollback/retry behavior below is simulated, not live evidence.
+// Stock updates and compensation below are simulated, not live evidence.
 async function startMockApp(t) {
   const customer = new Customer({ name: "Alex Morgan", isGold: true, phone: "+1-202-555-0101" });
   const movie = new Movie({
@@ -22,44 +22,23 @@ async function startMockApp(t) {
     const rental = new Rental({ ...data, dateOut: new Date(date) });
     return [String(rental._id), rental];
   }));
-  const state = { stock: 2, rentals, session: null, operations: [] };
-  const assertSession = (session) => {
-    assert.ok(state.session, "Database writes must be inside the transaction");
-    assert.equal(session, state.session);
-  };
-  const runTransaction = async (callback, options) => {
-    assert.deepEqual(options, { readPreference: "primary" });
-    const snapshot = { stock: state.stock, rentals: new Map(state.rentals) };
-    state.session = {};
-    state.operations.push("begin");
-    try {
-      const result = await callback(state.session);
-      state.operations.push("commit");
-      return result;
-    } catch (err) {
-      state.stock = snapshot.stock;
-      state.rentals = snapshot.rentals;
-      state.operations.push("abort");
-      throw err;
-    } finally {
-      state.session = null;
-    }
-  };
-  t.mock.method(mongoose.connection, "transaction", runTransaction);
-  t.mock.method(Customer, "findById", (id) => ({
-    session: async (session) => {
-      assertSession(session);
-      return String(id).toLowerCase() === String(customer._id) ? customer : null;
-    },
-  }));
-  t.mock.method(Movie, "findById", (id) => ({
-    session: async (session) => {
-      assertSession(session);
-      return String(id).toLowerCase() === String(movie._id) ? movie : null;
-    },
-  }));
+  const state = { stock: 2, rentals, operations: [] };
+  t.mock.method(mongoose.connection, "transaction", () => {
+    throw new Error("Transactions are unavailable on standalone MongoDB");
+  });
+  t.mock.method(Customer, "findById", async (id) =>
+    String(id).toLowerCase() === String(customer._id) ? customer : null);
+  t.mock.method(Movie, "findById", async (id) =>
+    String(id).toLowerCase() === String(movie._id) ? movie : null);
   t.mock.method(Movie, "updateOne", async (filter, update, options) => {
-    assertSession(options.session);
+    assert.equal(options, undefined);
+    if (update.$inc.numberInStock === 1) {
+      assert.deepEqual(filter, { _id: movie._id });
+      assert.deepEqual(update, { $inc: { numberInStock: 1 } });
+      state.stock++;
+      state.operations.push("restore");
+      return { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
+    }
     assert.deepEqual(filter, { _id: movie._id, numberInStock: { $gte: 1 } });
     assert.deepEqual(update, { $inc: { numberInStock: -1 } });
     if (state.stock < 1) return { acknowledged: true, matchedCount: 0, modifiedCount: 0 };
@@ -68,7 +47,7 @@ async function startMockApp(t) {
     return { acknowledged: true, matchedCount: 1, modifiedCount: 1 };
   });
   t.mock.method(Rental.prototype, "save", async function (options) {
-    assertSession(options.session);
+    assert.equal(options, undefined);
     await this.validate();
     state.rentals.set(String(this._id), this);
     state.operations.push("save");
@@ -98,7 +77,7 @@ async function startMockApp(t) {
     },
   );
   const payload = { customerId: String(customer._id), movieId: String(movie._id) };
-  return { request, state, customer, movie, payload, runTransaction };
+  return { request, state, customer, movie, payload };
 }
 
 test("Rental validation requires only valid customer and movie IDs", () => {
@@ -131,7 +110,7 @@ test("Rental HTTP lists newest first and fetches by ID (mocked database)", async
   assert.equal(mongoose.connection.transaction.mock.callCount(), 0);
 });
 
-test("Rental HTTP creates schema-compatible snapshots and decrements stock in one transaction (mocked database)", async (t) => {
+test("Rental HTTP creates snapshots and decrements stock without transactions (mocked database)", async (t) => {
   const { request, state, customer, movie, payload } = await startMockApp(t);
   const before = Date.now();
   const response = await request("POST", "/api/rentals", payload);
@@ -151,8 +130,8 @@ test("Rental HTTP creates schema-compatible snapshots and decrements stock in on
   assert.equal(rental.movieId, undefined);
   assert.equal(state.stock, 1);
   assert.equal(state.rentals.size, 3);
-  assert.deepEqual(state.operations, ["begin", "decrement", "save", "commit"]);
-  assert.equal(state.session, null);
+  assert.deepEqual(state.operations, ["decrement", "save"]);
+  assert.equal(mongoose.connection.transaction.mock.callCount(), 0);
   assert.deepEqual(await (await request("GET", `/api/rentals/${rental._id}`)).json(), rental);
 
   customer.name = "Jamie Taylor";
@@ -205,7 +184,7 @@ test("Rental HTTP rejects missing customers/movies without writes (mocked databa
   assert.equal(Rental.prototype.save.mock.callCount(), 0);
   assert.equal(state.stock, 2);
   assert.equal(state.rentals.size, 2);
-  assert.deepEqual(state.operations, ["begin", "abort", "begin", "abort"]);
+  assert.deepEqual(state.operations, []);
 });
 
 test("Rental HTTP refuses another rental after the last copy is rented (mocked database)", async (t) => {
@@ -220,69 +199,96 @@ test("Rental HTTP refuses another rental after the last copy is rented (mocked d
   assert.equal(Rental.prototype.save.mock.callCount(), 1);
 });
 
-test("Rental HTTP aborts stock changes when validation or saving fails (mocked transaction)", async (t) => {
+test("Rental HTTP validates snapshots before changing stock (mocked database)", async (t) => {
   const { request, state, customer, payload } = await startMockApp(t);
-  const log = t.mock.method(console, "error", () => {});
   customer.phone = "bad";
-  let response = await request("POST", "/api/rentals", payload);
+  const response = await request("POST", "/api/rentals", payload);
   assert.equal(response.status, 400);
   assert.match(await response.text(), /phone/);
   assert.equal(state.stock, 2);
   assert.equal(state.rentals.size, 2);
+  assert.equal(Movie.updateOne.mock.callCount(), 0);
+  assert.equal(Rental.prototype.save.mock.callCount(), 0);
+  assert.deepEqual(state.operations, []);
+});
 
-  customer.phone = "+1-202-555-0101";
+test("Rental HTTP restores stock when saving fails (mocked database)", async (t) => {
+  const { request, state, payload } = await startMockApp(t);
+  const log = t.mock.method(console, "error", () => {});
   Rental.prototype.save.mock.mockImplementationOnce(async () => {
     throw new Error("Private save details");
   });
-  response = await request("POST", "/api/rentals", payload);
+  const response = await request("POST", "/api/rentals", payload);
   assert.equal(response.status, 500);
   assert.equal(await response.text(), "An unexpected error occurred");
   assert.equal(state.stock, 2);
   assert.equal(state.rentals.size, 2);
   assert.equal(log.mock.callCount(), 1);
-  assert.deepEqual(state.operations, ["begin", "decrement", "abort", "begin", "decrement", "abort"]);
+  assert.deepEqual(state.operations, ["decrement", "restore"]);
 });
 
-test("Rental HTTP does not return success when committing fails (mocked transaction)", async (t) => {
-  const { request, state, payload, runTransaction } = await startMockApp(t);
-  t.mock.method(console, "error", () => {});
-  mongoose.connection.transaction.mock.mockImplementationOnce((callback, options) =>
-    runTransaction(async (session) => {
-      await callback(session);
-      throw new Error("Commit failed");
-    }, options));
+test("Rental HTTP logs failed compensation and preserves the save error (mocked database)", async (t) => {
+  const { request, state, movie, payload } = await startMockApp(t);
+  const log = t.mock.method(console, "error", () => {});
+  const saveError = new Error("Private save details");
+  const restoreError = new Error("Private restore details");
+  Rental.prototype.save.mock.mockImplementationOnce(async () => {
+    throw saveError;
+  });
+  Movie.updateOne.mock.mockImplementationOnce(async () => {
+    throw restoreError;
+  }, 1);
 
   const response = await request("POST", "/api/rentals", payload);
   assert.equal(response.status, 500);
   assert.equal(await response.text(), "An unexpected error occurred");
-  assert.equal(state.stock, 2);
+  assert.equal(state.stock, 1);
   assert.equal(state.rentals.size, 2);
-  assert.deepEqual(state.operations, ["begin", "decrement", "save", "abort"]);
+  assert.deepEqual(state.operations, ["decrement"]);
+  assert.equal(log.mock.callCount(), 2);
+  assert.equal(log.mock.calls[0].arguments[1].movieId, String(movie._id));
+  assert.equal(log.mock.calls[0].arguments[1].error, restoreError);
+  assert.equal(log.mock.calls[1].arguments[0], saveError);
 });
 
-test("Rental HTTP can retry the transaction callback without double-decrementing (mocked transaction)", async (t) => {
-  const { request, state, payload, runTransaction } = await startMockApp(t);
-  mongoose.connection.transaction.mock.mockImplementationOnce(async (callback, options) => {
-    const retry = new Error("Simulated transient write conflict");
-    await assert.rejects(runTransaction(async (session) => {
-      await callback(session);
-      throw retry;
-    }, options), (err) => err === retry);
-    return runTransaction(callback, options);
+test("Rental HTTP logs a missing movie during stock restoration (mocked database)", async (t) => {
+  const { request, state, payload } = await startMockApp(t);
+  const log = t.mock.method(console, "error", () => {});
+  Rental.prototype.save.mock.mockImplementationOnce(async () => {
+    throw new Error("Private save details");
   });
+  Movie.updateOne.mock.mockImplementationOnce(async () => ({
+    acknowledged: true, matchedCount: 0, modifiedCount: 0,
+  }), 1);
 
   const response = await request("POST", "/api/rentals", payload);
-  assert.equal(response.status, 201);
-  const rental = await response.json();
-  assert.ok(state.rentals.has(rental._id));
+  assert.equal(response.status, 500);
+  assert.equal(await response.text(), "An unexpected error occurred");
   assert.equal(state.stock, 1);
-  assert.equal(state.rentals.size, 3);
-  assert.deepEqual(state.operations, [
-    "begin", "decrement", "save", "abort", "begin", "decrement", "save", "commit",
-  ]);
+  assert.equal(state.rentals.size, 2);
+  assert.equal(log.mock.callCount(), 2);
+  assert.match(log.mock.calls[0].arguments[1].error.message, /Movie not found/);
 });
 
-test("Rental HTTP forwards lookup, stock-update, and transaction errors safely (mocked database)", async (t) => {
+test("Rental HTTP guards the last copy across concurrent requests (mocked database)", async (t) => {
+  const { request, state, payload } = await startMockApp(t);
+  state.stock = 1;
+  const responses = await Promise.all([
+    request("POST", "/api/rentals", payload),
+    request("POST", "/api/rentals", payload),
+  ]);
+  assert.deepEqual(responses.map(({ status }) => status).sort(), [201, 400]);
+  for (const response of responses) {
+    if (response.status === 201) await response.json();
+    else assert.equal(await response.text(), "Movie is not in stock");
+  }
+  assert.equal(state.stock, 0);
+  assert.equal(state.rentals.size, 3);
+  assert.deepEqual(state.operations, ["decrement", "save"]);
+  assert.equal(mongoose.connection.transaction.mock.callCount(), 0);
+});
+
+test("Rental HTTP forwards lookup and stock-update errors safely (mocked database)", async (t) => {
   const { request, state, payload } = await startMockApp(t);
   t.mock.method(console, "error", () => {});
   const fail = async () => { throw new Error("Private database details"); };
@@ -290,10 +296,9 @@ test("Rental HTTP forwards lookup, stock-update, and transaction errors safely (
   for (const [model, operation, method, endpoint, implementation] of [
     [Rental, "find", "GET", "/api/rentals", () => ({ sort: fail })],
     [Rental, "findById", "GET", `/api/rentals/${new mongoose.Types.ObjectId()}`, fail],
-    [Customer, "findById", "POST", "/api/rentals", () => ({ session: fail })],
-    [Movie, "findById", "POST", "/api/rentals", () => ({ session: fail })],
+    [Customer, "findById", "POST", "/api/rentals", fail],
+    [Movie, "findById", "POST", "/api/rentals", fail],
     [Movie, "updateOne", "POST", "/api/rentals", fail],
-    [mongoose.connection, "transaction", "POST", "/api/rentals", fail],
   ]) {
     model[operation].mock.mockImplementationOnce(implementation);
     const response = await request(method, endpoint, method === "POST" ? payload : undefined);

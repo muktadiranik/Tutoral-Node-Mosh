@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const router = express.Router();
+const auth = require("../middleware/auth");
 const { Customer, validateCustomer } = require("../models/customer");
 
 router.param("id", (req, res, next, id) => {
@@ -23,7 +24,7 @@ router.get("/:id", async (req, res) => {
   res.send(customer);
 });
 
-router.post("/", validateCustomer, async (req, res) => {
+router.post("/", [auth, validateCustomer], async (req, res) => {
   const customer = await Customer.create({
     name: req.body.name,
     phone: req.body.phone,
@@ -32,7 +33,7 @@ router.post("/", validateCustomer, async (req, res) => {
   res.status(201).send(customer);
 });
 
-router.put("/:id", validateCustomer, async (req, res) => {
+router.put("/:id", [auth, validateCustomer], async (req, res) => {
   const customer = await Customer.findByIdAndUpdate(
     req.params.id,
     {
@@ -49,7 +50,7 @@ router.put("/:id", validateCustomer, async (req, res) => {
   res.send(customer);
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", auth, async (req, res) => {
   const customer = await Customer.findByIdAndDelete(req.params.id);
   if (!customer) return res.status(404).send("Customer not found");
 

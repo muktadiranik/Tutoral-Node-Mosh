@@ -16,6 +16,26 @@ npm start
 - `npm run seed:rentals`: insert 10 sample rental records without changing stock (optional).
 - `npm test`: check imports, validation, CRUD, shared data, and page rendering.
 
+Vidly requires a JWT signing key. In **PowerShell**, generate a random key and
+start the app from this directory in the same terminal:
+
+```powershell
+$env:vidly_jwtPrivateKey = node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))"
+npm run start:vidly
+```
+
+PowerShell's `set` is not the Command Prompt environment-variable command.
+In **Command Prompt (cmd.exe)**, use `set "vidly_jwtPrivateKey=your-long-random-secret"`
+instead. These commands apply to that terminal and processes started from it;
+restart an existing Node process after setting the variable. Keep the real key
+out of source files and Git. Generating a different key invalidates old tokens.
+
+Vidly resolves its config from `vidly/config/`, regardless of the launch
+directory, unless `NODE_CONFIG_DIR` explicitly overrides it. Its
+`custom-environment-variables.json` maps `jwtPrivateKey` to
+`vidly_jwtPrivateKey`. Startup fails with a clear error if the key is missing
+or blank; importing the app for tests does not start it or terminate the process.
+
 Both apps default to port 3000. Run one at a time or set `PORT` to a different
 value for the second app.
 

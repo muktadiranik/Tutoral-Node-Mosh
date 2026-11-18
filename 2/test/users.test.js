@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
 const test = require("node:test");
+const bcrypt = require("bcrypt");
 const { User } = require("../vidly/models/user");
 
 // Exercise middleware and HTTP handlers without creating real user records.
@@ -84,7 +85,8 @@ test("User registration accepts different emails sharing a password (mocked data
   }
   assert.equal(User.prototype.save.mock.callCount(), 2);
   for (const call of User.prototype.save.mock.calls) {
-    assert.equal(call.this.password, payload.password);
+    assert.notEqual(call.this.password, payload.password);
+    assert.equal(await bcrypt.compare(payload.password, call.this.password), true);
   }
 });
 
