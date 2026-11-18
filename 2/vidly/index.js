@@ -4,6 +4,7 @@ const genresRouter = require("./routes/genres");
 const customersRouter = require("./routes/customers");
 const moviesRouter = require("./routes/movies");
 const rentalsRouter = require("./routes/rentals");
+const userRouter = require("./routes/users");
 
 const app = express();
 app.use(express.json());
@@ -11,6 +12,7 @@ app.use("/api/genres", genresRouter);
 app.use("/api/customers", customersRouter);
 app.use("/api/movies", moviesRouter);
 app.use("/api/rentals", rentalsRouter);
+app.use("/api/users", userRouter);
 
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
