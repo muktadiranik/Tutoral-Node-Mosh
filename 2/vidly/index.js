@@ -1,64 +1,30 @@
-const path = require("node:path");
+const path = require("path");
+const express = require("express");
+const winston = require("winston");
 
 if (!process.env.NODE_CONFIG_DIR) {
   process.env.NODE_CONFIG_DIR = path.join(__dirname, "config");
 }
 
-const express = require("express");
-const mongoose = require("mongoose");
-const config = require("config");
-const genresRouter = require("./routes/genres");
-const customersRouter = require("./routes/customers");
-const moviesRouter = require("./routes/movies");
-const rentalsRouter = require("./routes/rentals");
-const userRouter = require("./routes/users");
-const authRouter = require("./routes/auth");
-
 const app = express();
-app.use(express.json());
-app.use("/api/genres", genresRouter);
-app.use("/api/customers", customersRouter);
-app.use("/api/movies", moviesRouter);
-app.use("/api/rentals", rentalsRouter);
-app.use("/api/users", userRouter);
-app.use("/api/auth", authRouter);
 
-app.use((err, req, res, next) => {
-  if (res.headersSent) return next(err);
-
-  if (err instanceof mongoose.Error.ValidationError) {
-    return res.status(400).send(err.message);
-  }
-
-  if (err.status >= 400 && err.status < 500) {
-    return res.status(err.status).send(err.message);
-  }
-
-  console.error(err);
-  res.status(500).send("An unexpected error occurred");
-});
+require("./startup/routes")(app);
 
 if (require.main === module) {
-  const jwtPrivateKey = config.has("jwtPrivateKey") ? config.get("jwtPrivateKey") : "";
-  if (typeof jwtPrivateKey !== "string" || !jwtPrivateKey.trim()) {
-    console.error("JWT private key not specified. Set vidly_jwtPrivateKey in the terminal before starting Vidly.");
-    process.exit(1);
-  }
-
   const port = process.env.PORT || 3000;
 
-  mongoose
-    .connect(
-      process.env.MONGODB_URI || "mongodb://localhost:27017/mongo-exercises",
-    )
+  require("./startup/config")();
+  require("./startup/logging")();
+  require("./startup/database")()
     .then(() => {
-      console.log("Connected to MongoDB");
       app.listen(port, () => {
         console.log(`Listening on port ${port}`);
+        winston.info(`Listening on port ${port}`);
       });
     })
     .catch((err) => {
       console.error("Could not connect to MongoDB:", err.message);
+      winston.error("Could not connect to MongoDB:", err.message);
       process.exitCode = 1;
     });
 }

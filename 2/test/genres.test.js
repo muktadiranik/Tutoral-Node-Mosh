@@ -1,9 +1,15 @@
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
+const path = require("node:path");
 const test = require("node:test");
 const mongoose = require("mongoose");
+const jwt = require("jsonwebtoken");
 const Genre = require("../vidly/models/genre");
 const sampleGenres = require("../vidly/data/genres");
+
+const jwtPrivateKey = "vidly-genre-tests-only-not-for-production";
+process.env.NODE_CONFIG_DIR = path.join(__dirname, "../vidly/config");
+process.env.vidly_jwtPrivateKey = jwtPrivateKey;
 
 // Exercise the HTTP routes without connecting to or modifying a real database.
 async function startMockApp(t) {
@@ -44,11 +50,17 @@ async function startMockApp(t) {
   }));
   await once(server, "listening");
 
-  const request = (method, endpoint, body, raw = false) => fetch(
+  const adminToken = jwt.sign({
+    _id: new mongoose.Types.ObjectId().toHexString(), isAdmin: true,
+  }, jwtPrivateKey);
+  const request = (method, endpoint, body, raw = false, token = adminToken) => fetch(
     `http://127.0.0.1:${server.address().port}${endpoint}`,
     {
       method,
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      headers: {
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...(token ? { "x-auth-token": token } : {}),
+      },
       body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
       signal: AbortSignal.timeout(5000),
     },
@@ -146,6 +158,40 @@ test("Genre HTTP validation rejects invalid writes without changing data (mocked
 
   const boundary = await request("POST", "/api/genres", { name: "x".repeat(255) });
   assert.equal(boundary.status, 201);
+});
+
+test("Genre HTTP preserves public reads, authentication, and admin-only deletion (mocked model)", async (t) => {
+  const { request, store } = await startMockApp(t);
+  const id = store.keys().next().value;
+  const memberToken = jwt.sign({
+    _id: new mongoose.Types.ObjectId().toHexString(), isAdmin: false,
+  }, jwtPrivateKey);
+
+  const publicRead = await request("GET", "/api/genres", undefined, false, null);
+  assert.equal(publicRead.status, 200);
+  assert.equal((await publicRead.json()).length, 16);
+
+  for (const [method, endpoint, body] of [
+    ["POST", "/api/genres", { name: "Valid" }],
+    ["PUT", `/api/genres/${id}`, { name: "Valid" }],
+    ["DELETE", `/api/genres/${id}`, undefined],
+  ]) {
+    const response = await request(method, endpoint, body, false, null);
+    assert.equal(response.status, 401);
+    assert.equal(await response.text(), "Access denied");
+  }
+
+  const invalidToken = await request("DELETE", `/api/genres/${id}`, undefined, false, "invalid");
+  assert.equal(invalidToken.status, 400);
+  assert.equal(await invalidToken.text(), "Invalid token");
+
+  const forbidden = await request("DELETE", `/api/genres/${id}`, undefined, false, memberToken);
+  assert.equal(forbidden.status, 403);
+  assert.equal(await forbidden.text(), "Forbidden");
+  assert.equal(store.size, 16);
+  assert.equal(Genre.create.mock.callCount(), 0);
+  assert.equal(Genre.findByIdAndUpdate.mock.callCount(), 0);
+  assert.equal(Genre.findByIdAndDelete.mock.callCount(), 0);
 });
 
 test("Genre HTTP requests reject malformed and missing IDs (mocked model)", async (t) => {
