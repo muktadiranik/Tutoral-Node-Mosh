@@ -59,9 +59,13 @@ test("Importing Vidly without a JWT key does not exit or connect to MongoDB", ()
   assert.equal(result.status, 0, result.stderr);
 });
 
-test("Vidly startup rejects missing, empty, and whitespace JWT keys with a clear error", () => {
+test("Vidly startup rejects blank JWT configuration with missing, empty, or whitespace environment keys", () => {
   for (const overrides of [{}, { vidly_jwtPrivateKey: "" }, { vidly_jwtPrivateKey: "   " }]) {
-    const result = run([entry], projectDirectory, environment(overrides));
+    const result = run([entry], projectDirectory, environment({
+      // Do not let the sample key in config/test.json mask a blank-key scenario.
+      NODE_CONFIG: JSON.stringify({ jwtPrivateKey: "" }),
+      ...overrides,
+    }));
     assert.equal(result.status, 1);
     assert.match(result.stderr, /JWT private key not specified.*vidly_jwtPrivateKey/);
     assert.doesNotMatch(result.stderr, /Configuration property|Connected to MongoDB|Could not connect/);

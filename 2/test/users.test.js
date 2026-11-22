@@ -2,6 +2,9 @@ const assert = require("node:assert/strict");
 const { once } = require("node:events");
 const test = require("node:test");
 const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+const winston = require("winston");
+const { jwtPrivateKey } = require("../test-support/vidly");
 const { User } = require("../vidly/models/user");
 
 // Exercise middleware and HTTP handlers without creating real user records.
@@ -26,7 +29,9 @@ async function startMockApp(t) {
   });
 }
 
-const payload = { name: "Mosh Hamedani", email: "mosh@example.com", password: "test-password" };
+const payload = {
+  name: "Mosh Hamedani", email: "mosh@example.com", password: "test-password", isAdmin: false,
+};
 
 test("User schema keeps emails unique without indexing passwords", () => {
   assert.equal(User.schema.path("email").options.unique, true);
@@ -51,6 +56,7 @@ test("User registration validates invalid bodies before database calls (mocked d
     { ...payload, name: "x".repeat(256) }, { ...payload, name: 12345 },
     { ...payload, email: undefined }, { ...payload, email: "invalid" },
     { ...payload, password: undefined }, { ...payload, password: "" },
+    { ...payload, isAdmin: undefined }, { ...payload, isAdmin: "not-a-boolean" },
     { ...payload, extra: true }]) {
     const response = await request(body);
     assert.equal(response.status, 400);
@@ -68,7 +74,11 @@ test("User registration runs validation middleware and uses normalized input (mo
   assert.equal(user.name, payload.name);
   assert.equal(user.email, payload.email);
   assert.match(user._id, /^[a-f0-9]{24}$/);
-  assert.deepEqual(Object.keys(user).sort(), ["_id", "email", "name"]);
+  assert.deepEqual(Object.keys(user).sort(), ["_id", "email", "isAdmin", "name"]);
+  assert.equal(user.isAdmin, false);
+  const claims = jwt.verify(response.headers.get("x-auth-token"), jwtPrivateKey);
+  assert.equal(claims._id, user._id);
+  assert.equal(claims.isAdmin, false);
   assert.equal(Object.hasOwn(user, "password"), false);
   assert.deepEqual(User.findOne.mock.calls[0].arguments[0], { email: payload.email });
   assert.equal(User.prototype.save.mock.callCount(), 1);
@@ -102,7 +112,7 @@ test("User registration keeps duplicate-email handling after validation (mocked 
 
 test("User registration forwards database errors to the existing error handler (mocked database)", async (t) => {
   const request = await startMockApp(t);
-  t.mock.method(console, "error", () => {});
+  t.mock.method(winston, "error", () => {});
   const fail = async () => { throw new Error("Private database details"); };
   for (const [model, method] of [[User, "findOne"], [User.prototype, "save"]]) {
     model[method].mock.mockImplementationOnce(fail);

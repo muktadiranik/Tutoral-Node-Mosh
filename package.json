@@ -3,5 +3,16 @@
     "express": "^5.3.0",
     "mongoose": "^9.12.1",
     "nodemon": "^3.1.14"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.5.2",
+    "jest": "^30.5.2"
+  },
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand && npm --prefix 2 test"
+  },
+  "jest": {
+    "transform": {},
+    "testMatch": ["<rootDir>/tests/tests/**/*.test.js"]
   }
 }

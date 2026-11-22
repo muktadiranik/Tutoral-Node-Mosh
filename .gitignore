@@ -1,1 +1,3 @@
 node_modules/
+/2/coverage/
+/2/vidly/*.log

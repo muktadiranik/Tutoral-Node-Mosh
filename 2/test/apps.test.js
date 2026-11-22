@@ -76,13 +76,18 @@ test("all local imports resolve and runtime dependencies are declared", () => {
     const source = fs.readFileSync(filename, "utf8");
     if (filename.endsWith(".json")) JSON.parse(source);
     if (!filename.endsWith(".js")) continue;
+    const isTestSource = path.relative(projectDirectory, filename).split(path.sep)
+      .some((part) => ["test", "tests", "test-support"].includes(part));
 
     for (const [, specifier] of source.matchAll(/require\(["']([^"']+)["']\)/g)) {
       assert.ok(require.resolve(specifier, { paths: [path.dirname(filename)] }));
       if (specifier.startsWith(".") || isBuiltin(specifier)) continue;
       const packageName = specifier.startsWith("@")
         ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
-      assert.ok(packageJson.dependencies[packageName], `${packageName} must be a runtime dependency`);
+      const declared = packageJson.dependencies[packageName] ||
+        (isTestSource && packageJson.devDependencies[packageName]);
+      assert.ok(declared,
+        `${packageName} must be declared as ${isTestSource ? "a test" : "a runtime"} dependency`);
     }
   }
 });

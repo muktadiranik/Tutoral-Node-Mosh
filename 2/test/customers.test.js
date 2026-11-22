@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { once } = require("node:events");
 const test = require("node:test");
 const mongoose = require("mongoose");
+const { token } = require("../test-support/vidly");
 const Customer = require("../vidly/models/customer");
 
 // Test the real validation middleware without writing customer records to MongoDB.
@@ -13,11 +14,15 @@ async function startMockApp(t) {
   }));
   await once(server, "listening");
 
+  const authToken = token();
   return (method, endpoint, body) => fetch(
     `http://127.0.0.1:${server.address().port}${endpoint}`,
     {
       method,
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      headers: {
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        "x-auth-token": authToken,
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(5000),
     },

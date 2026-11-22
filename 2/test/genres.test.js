@@ -1,59 +1,27 @@
 const assert = require("node:assert/strict");
+const { randomUUID } = require("node:crypto");
 const { once } = require("node:events");
 const path = require("node:path");
 const test = require("node:test");
+const { describe, before, beforeEach, afterEach, after } = test;
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
-const Genre = require("../vidly/models/genre");
-const sampleGenres = require("../vidly/data/genres");
+const winston = require("winston");
 
 const jwtPrivateKey = "vidly-genre-tests-only-not-for-production";
+process.env.NODE_ENV = "test";
 process.env.NODE_CONFIG_DIR = path.join(__dirname, "../vidly/config");
 process.env.vidly_jwtPrivateKey = jwtPrivateKey;
 
-// Exercise the HTTP routes without connecting to or modifying a real database.
-async function startMockApp(t) {
-  const store = new Map(sampleGenres.map(({ name }) => {
-    const genre = new Genre({ name });
-    return [String(genre._id), genre];
-  }));
+const config = require("config");
+const Genre = require("../vidly/models/genre");
+const sampleGenres = require("../vidly/data/genres");
 
-  t.mock.method(Genre, "find", async () => [...store.values()]);
-  t.mock.method(Genre, "findById", async (id) => store.get(String(id)) || null);
-  t.mock.method(Genre, "create", async (data) => {
-    const genre = new Genre(data);
-    await genre.validate();
-    store.set(String(genre._id), genre);
-    return genre;
-  });
-  t.mock.method(Genre, "findByIdAndUpdate", async (id, update, options) => {
-    assert.equal(options.returnDocument, "after");
-    assert.equal(options.runValidators, true);
-    const original = store.get(String(id));
-    if (!original) return null;
-
-    const genre = new Genre({ ...original.toObject(), ...update.$set });
-    await genre.validate();
-    store.set(String(id), genre);
-    return genre;
-  });
-  t.mock.method(Genre, "findByIdAndDelete", async (id) => {
-    const genre = store.get(String(id)) || null;
-    store.delete(String(id));
-    return genre;
-  });
-
-  const app = require("../vidly");
-  const server = app.listen(0, "127.0.0.1");
-  t.after(() => new Promise((resolve, reject) => {
-    server.close((err) => err ? reject(err) : resolve());
-  }));
-  await once(server, "listening");
-
+function makeRequest(server) {
   const adminToken = jwt.sign({
     _id: new mongoose.Types.ObjectId().toHexString(), isAdmin: true,
   }, jwtPrivateKey);
-  const request = (method, endpoint, body, raw = false, token = adminToken) => fetch(
+  return (method, endpoint, body, raw = false, token = adminToken) => fetch(
     `http://127.0.0.1:${server.address().port}${endpoint}`,
     {
       method,
@@ -65,8 +33,6 @@ async function startMockApp(t) {
       signal: AbortSignal.timeout(5000),
     },
   );
-
-  return { request, store };
 }
 
 test("Vidly imports work without a circular dependency or database side effects", (t) => {
@@ -96,155 +62,233 @@ test("Genre schema validates and trims names without MongoDB", async () => {
   }
 });
 
-test("Genre HTTP CRUD uses MongoDB IDs and returns the updated data (mocked model)", async (t) => {
-  const { request } = await startMockApp(t);
-  const baseline = await (await request("GET", "/api/genres")).json();
-  assert.equal(baseline.length, 16);
-  assert.ok(baseline.every((genre) => /^[a-f0-9]{24}$/.test(genre._id)));
-  assert.deepEqual(await (await request("GET", "/api/genres/")).json(), baseline);
+describe("/api/genres", { concurrency: false }, () => {
+  const databaseName = `vidly_integration_test_${randomUUID().replaceAll("-", "")}`;
+  let server;
+  let request;
+  let genres;
 
-  const first = await request("GET", `/api/genres/${baseline[0]._id}`);
-  assert.equal(first.status, 200);
-  assert.deepEqual(await first.json(), baseline[0]);
-  assert.equal((await request("GET", `/${baseline[0]._id}`)).status, 404);
+  function assertTestDatabase() {
+    assert.equal(process.env.NODE_ENV, "test");
+    assert.equal(mongoose.connection.name, databaseName,
+      "Refusing to clean a database not owned by this suite");
+  }
 
-  const response = await request("POST", "/api/genres", { name: "  Western  " });
-  assert.equal(response.status, 201);
-  const created = await response.json();
-  assert.equal(created.name, "Western");
-  assert.match(created._id, /^[a-f0-9]{24}$/);
-  assert.ok(!baseline.some((genre) => genre._id === created._id));
+  before(async () => {
+    try {
+      await mongoose.connect(
+        process.env.VIDLY_TEST_MONGODB_URI || config.get("database"),
+        { dbName: databaseName, serverSelectionTimeoutMS: 5000, maxPoolSize: 5 },
+      );
+    } catch (error) {
+      throw new Error(
+        "Start MongoDB or set VIDLY_TEST_MONGODB_URI before running the genre integration tests.",
+        { cause: error },
+      );
+    }
+    assertTestDatabase();
+    await Promise.all(mongoose.modelNames().map((name) => mongoose.model(name).init()));
+  });
 
-  const update = await request("PUT", `/api/genres/${created._id}`, { name: "  Updated  " });
-  assert.equal(update.status, 200);
-  const updated = await update.json();
-  assert.equal(updated._id, created._id);
-  assert.equal(updated.name, "Updated");
-  assert.deepEqual(await (await request("GET", `/api/genres/${created._id}`)).json(), updated);
+  beforeEach(async () => {
+    // Vidly exports an Express app, not a listening HTTP server.
+    server = require("../vidly").listen(0, "127.0.0.1");
+    await once(server, "listening");
+    assertTestDatabase();
+    assert.equal(await Genre.countDocuments(), 0, "The previous test must clean its data");
+    genres = await Genre.insertMany(sampleGenres.map(({ name }) => ({ name })));
+    request = makeRequest(server);
+  });
 
-  const deletion = await request("DELETE", `/api/genres/${baseline[1]._id}`);
-  assert.equal(deletion.status, 200);
-  const remaining = await deletion.json();
-  assert.equal(remaining.length, 16);
-  assert.ok(!remaining.some((genre) => genre._id === baseline[1]._id));
-  assert.ok(remaining.some((genre) => genre._id === created._id));
-  assert.deepEqual(await (await request("GET", "/api/genres")).json(), remaining);
-  assert.equal((await request("GET", `/api/genres/${baseline[1]._id}`)).status, 404);
-});
+  afterEach(async () => {
+    try {
+      if (server?.listening) {
+        await new Promise((resolve, reject) => {
+          server.close((error) => error ? reject(error) : resolve());
+        });
+      }
+    } finally {
+      server = undefined;
+      if (mongoose.connection.readyState === 1) {
+        assertTestDatabase();
+        await Genre.deleteMany({});
+      }
+    }
+  });
 
-test("Genre HTTP validation rejects invalid writes without changing data (mocked model)", async (t) => {
-  const { request } = await startMockApp(t);
-  const list = async () => (await request("GET", "/api/genres")).json();
-  const baseline = await list();
+  after(async () => {
+    try {
+      if (mongoose.connection.readyState === 1) {
+        assertTestDatabase();
+        await mongoose.connection.dropDatabase();
+      }
+    } finally {
+      await mongoose.disconnect();
+    }
+  });
+
+  test("Genre HTTP CRUD persists MongoDB IDs and returns the updated data", async (t) => {
+    const updateSpy = t.mock.method(Genre, "findByIdAndUpdate");
+    const baseline = await (await request("GET", "/api/genres")).json();
+    assert.equal(baseline.length, 16);
+    assert.ok(baseline.every((genre) => /^[a-f0-9]{24}$/.test(genre._id)));
+    assert.deepEqual(await (await request("GET", "/api/genres/")).json(), baseline);
+
+    const first = await request("GET", `/api/genres/${baseline[0]._id}`);
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), baseline[0]);
+    assert.equal((await request("GET", `/${baseline[0]._id}`)).status, 404);
+
+    const response = await request("POST", "/api/genres", { name: "  Western  " });
+    assert.equal(response.status, 201);
+    const created = await response.json();
+    assert.equal(created.name, "Western");
+    assert.match(created._id, /^[a-f0-9]{24}$/);
+    assert.ok(!baseline.some((genre) => genre._id === created._id));
+    assert.equal((await Genre.findById(created._id)).name, "Western");
+
+    const update = await request("PUT", `/api/genres/${created._id}`, { name: "  Updated  " });
+    assert.equal(update.status, 200);
+    const updated = await update.json();
+    assert.equal(updated._id, created._id);
+    assert.equal(updated.name, "Updated");
+    assert.equal((await Genre.findById(created._id)).name, "Updated");
+    assert.deepEqual(updateSpy.mock.calls[0].arguments[2], {
+      returnDocument: "after", runValidators: true,
+    });
+    assert.deepEqual(await (await request("GET", `/api/genres/${created._id}`)).json(), updated);
+
+    const deletion = await request("DELETE", `/api/genres/${baseline[1]._id}`);
+    assert.equal(deletion.status, 200);
+    const remaining = await deletion.json();
+    assert.equal(remaining.length, 16);
+    assert.ok(!remaining.some((genre) => genre._id === baseline[1]._id));
+    assert.ok(remaining.some((genre) => genre._id === created._id));
+    assert.deepEqual(await (await request("GET", "/api/genres")).json(), remaining);
+    assert.equal((await request("GET", `/api/genres/${baseline[1]._id}`)).status, 404);
+    assert.equal(await Genre.findById(baseline[1]._id), null);
+  });
+
   const invalidBodies = [undefined, {}, [], { name: "" }, { name: "    " },
     { name: "abcd" }, { name: "x".repeat(256) }, { name: 123 },
     { name: null }, { name: "Valid", extra: true }];
 
   for (const method of ["POST", "PUT"]) {
     for (const [index, body] of invalidBodies.entries()) {
-      await t.test(`${method} rejects invalid body ${index + 1}`, async () => {
-        const endpoint = method === "POST" ? "/api/genres" : `/api/genres/${baseline[0]._id}`;
+      test(`${method} rejects invalid body ${index + 1} without changing data`, async (t) => {
+        const createSpy = t.mock.method(Genre, "create");
+        const updateSpy = t.mock.method(Genre, "findByIdAndUpdate");
+        const baseline = await (await request("GET", "/api/genres")).json();
+        const endpoint = method === "POST" ? "/api/genres" : `/api/genres/${genres[0]._id}`;
         const response = await request(method, endpoint, body);
         assert.equal(response.status, 400);
         assert.ok((await response.text()).length > 0);
-        assert.deepEqual(await list(), baseline);
+        assert.deepEqual(await (await request("GET", "/api/genres")).json(), baseline);
+        assert.equal(createSpy.mock.callCount(), 0);
+        assert.equal(updateSpy.mock.callCount(), 0);
       });
     }
   }
 
-  const malformed = await request("POST", "/api/genres", '{"name":', true);
-  assert.equal(malformed.status, 400);
-  assert.deepEqual(await list(), baseline);
+  test("POST rejects malformed JSON without changing data", async () => {
+    const baseline = await (await request("GET", "/api/genres")).json();
+    const response = await request("POST", "/api/genres", '{"name":', true);
+    assert.equal(response.status, 400);
+    assert.deepEqual(await (await request("GET", "/api/genres")).json(), baseline);
+  });
 
-  const boundary = await request("POST", "/api/genres", { name: "x".repeat(255) });
-  assert.equal(boundary.status, 201);
-});
+  test("POST accepts a name at the 255-character boundary", async () => {
+    const response = await request("POST", "/api/genres", { name: "x".repeat(255) });
+    assert.equal(response.status, 201);
+    assert.equal(await Genre.countDocuments(), 17);
+  });
 
-test("Genre HTTP preserves public reads, authentication, and admin-only deletion (mocked model)", async (t) => {
-  const { request, store } = await startMockApp(t);
-  const id = store.keys().next().value;
-  const memberToken = jwt.sign({
-    _id: new mongoose.Types.ObjectId().toHexString(), isAdmin: false,
-  }, jwtPrivateKey);
+  test("Genre HTTP preserves public reads, authentication, and admin-only deletion", async (t) => {
+    const createSpy = t.mock.method(Genre, "create");
+    const updateSpy = t.mock.method(Genre, "findByIdAndUpdate");
+    const deleteSpy = t.mock.method(Genre, "findByIdAndDelete");
+    const id = String(genres[0]._id);
+    const memberToken = jwt.sign({
+      _id: new mongoose.Types.ObjectId().toHexString(), isAdmin: false,
+    }, jwtPrivateKey);
 
-  const publicRead = await request("GET", "/api/genres", undefined, false, null);
-  assert.equal(publicRead.status, 200);
-  assert.equal((await publicRead.json()).length, 16);
+    const publicRead = await request("GET", "/api/genres", undefined, false, null);
+    assert.equal(publicRead.status, 200);
+    assert.equal((await publicRead.json()).length, 16);
 
-  for (const [method, endpoint, body] of [
-    ["POST", "/api/genres", { name: "Valid" }],
-    ["PUT", `/api/genres/${id}`, { name: "Valid" }],
-    ["DELETE", `/api/genres/${id}`, undefined],
-  ]) {
-    const response = await request(method, endpoint, body, false, null);
-    assert.equal(response.status, 401);
-    assert.equal(await response.text(), "Access denied");
-  }
+    for (const [method, endpoint, body] of [
+      ["POST", "/api/genres", { name: "Valid" }],
+      ["PUT", `/api/genres/${id}`, { name: "Valid" }],
+      ["DELETE", `/api/genres/${id}`, undefined],
+    ]) {
+      const response = await request(method, endpoint, body, false, null);
+      assert.equal(response.status, 401);
+      assert.equal(await response.text(), "Access denied");
+    }
 
-  const invalidToken = await request("DELETE", `/api/genres/${id}`, undefined, false, "invalid");
-  assert.equal(invalidToken.status, 400);
-  assert.equal(await invalidToken.text(), "Invalid token");
+    const invalidToken = await request("DELETE", `/api/genres/${id}`, undefined, false, "invalid");
+    assert.equal(invalidToken.status, 400);
+    assert.equal(await invalidToken.text(), "Invalid token");
 
-  const forbidden = await request("DELETE", `/api/genres/${id}`, undefined, false, memberToken);
-  assert.equal(forbidden.status, 403);
-  assert.equal(await forbidden.text(), "Forbidden");
-  assert.equal(store.size, 16);
-  assert.equal(Genre.create.mock.callCount(), 0);
-  assert.equal(Genre.findByIdAndUpdate.mock.callCount(), 0);
-  assert.equal(Genre.findByIdAndDelete.mock.callCount(), 0);
-});
+    const forbidden = await request("DELETE", `/api/genres/${id}`, undefined, false, memberToken);
+    assert.equal(forbidden.status, 403);
+    assert.equal(await forbidden.text(), "Forbidden");
+    assert.equal(await Genre.countDocuments(), 16);
+    assert.equal(createSpy.mock.callCount(), 0);
+    assert.equal(updateSpy.mock.callCount(), 0);
+    assert.equal(deleteSpy.mock.callCount(), 0);
+  });
 
-test("Genre HTTP requests reject malformed and missing IDs (mocked model)", async (t) => {
-  const { request, store } = await startMockApp(t);
   const missingId = new mongoose.Types.ObjectId().toHexString();
-
   for (const method of ["GET", "PUT", "DELETE"]) {
     for (const id of ["1", "invalid", "0123456789ab", "z".repeat(24), missingId]) {
-      await t.test(`${method} returns 404 for ${id}`, async () => {
+      test(`${method} returns 404 for ${id}`, async (t) => {
+        const operation = {
+          GET: "findById", PUT: "findByIdAndUpdate", DELETE: "findByIdAndDelete",
+        }[method];
+        const querySpy = t.mock.method(Genre, operation);
         const response = await request(method, `/api/genres/${id}`,
           method === "PUT" ? { name: "Valid" } : undefined);
         assert.equal(response.status, 404);
         assert.equal(await response.text(), "Genre not found");
-        assert.equal(store.size, 16);
+        assert.equal(await Genre.countDocuments(), 16);
+        // Only the well-formed missing ID may reach the real database query.
+        assert.equal(querySpy.mock.callCount(), id === missingId ? 1 : 0);
+        if (id === missingId) {
+          assert.equal(querySpy.mock.calls[0].arguments[0], missingId);
+        }
       });
     }
   }
 
-  // Only the well-formed missing ID may reach database operations.
-  for (const method of [Genre.findById, Genre.findByIdAndUpdate, Genre.findByIdAndDelete]) {
-    assert.equal(method.mock.callCount(), 1);
-    assert.equal(method.mock.calls[0].arguments[0], missingId);
-  }
-});
+  test("Genre HTTP errors are handled without leaking database details (injected failures)", async (t) => {
+    const id = String(genres[0]._id);
+    t.mock.method(winston, "error", () => {});
 
-test("Genre HTTP errors are handled without leaking database details (mocked model)", async (t) => {
-  const { request, store } = await startMockApp(t);
-  const id = store.keys().next().value;
-  t.mock.method(console, "error", () => {});
+    for (const [operation, method, endpoint] of [
+      ["find", "GET", "/api/genres"],
+      ["findById", "GET", `/api/genres/${id}`],
+      ["create", "POST", "/api/genres"],
+      ["findByIdAndUpdate", "PUT", `/api/genres/${id}`],
+      ["findByIdAndDelete", "DELETE", `/api/genres/${id}`],
+    ]) {
+      t.mock.method(Genre, operation, async () => {
+        throw new Error("Private database connection details");
+      }, { times: 1 });
+      const response = await request(method, endpoint,
+        ["POST", "PUT"].includes(method) ? { name: "Valid" } : undefined);
+      assert.equal(response.status, 500);
+      assert.equal(await response.text(), "An unexpected error occurred");
+      assert.equal(await Genre.countDocuments(), 16);
+    }
 
-  for (const [operation, method, endpoint] of [
-    ["find", "GET", "/api/genres"],
-    ["findById", "GET", `/api/genres/${id}`],
-    ["create", "POST", "/api/genres"],
-    ["findByIdAndUpdate", "PUT", `/api/genres/${id}`],
-    ["findByIdAndDelete", "DELETE", `/api/genres/${id}`],
-  ]) {
-    Genre[operation].mock.mockImplementationOnce(async () => {
-      throw new Error("Private database connection details");
-    });
-    const response = await request(method, endpoint,
-      ["POST", "PUT"].includes(method) ? { name: "Valid" } : undefined);
-    assert.equal(response.status, 500);
-    assert.equal(await response.text(), "An unexpected error occurred");
-    assert.equal(store.size, 16);
-  }
-
-  Genre.create.mock.mockImplementationOnce(async () => {
-    await new Genre({ name: "x" }).validate();
+    t.mock.method(Genre, "create", async () => {
+      await new Genre({ name: "x" }).validate();
+    }, { times: 1 });
+    const validation = await request("POST", "/api/genres", { name: "Valid" });
+    assert.equal(validation.status, 400);
+    assert.match(await validation.text(), /name/);
   });
-  const validation = await request("POST", "/api/genres", { name: "Valid" });
-  assert.equal(validation.status, 400);
-  assert.match(await validation.text(), /name/);
 });
 
 test("Explicit genre seeding strips numeric IDs and closes its connection (mocked model)", async (t) => {

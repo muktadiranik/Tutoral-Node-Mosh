@@ -3,15 +3,15 @@ const { once } = require("node:events");
 const test = require("node:test");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const winston = require("winston");
+const { jwtPrivateKey } = require("../test-support/vidly");
 const { User } = require("../vidly/models/user");
-
-const jwtPrivateKey = "vidly-auth-tests-only-not-for-production";
-process.env.vidly_jwtPrivateKey = jwtPrivateKey;
 
 function assertAuthToken(token, userId) {
   const decoded = jwt.verify(token, jwtPrivateKey, { algorithms: ["HS256"] });
   assert.equal(decoded._id, String(userId));
-  assert.deepEqual(Object.keys(decoded).sort(), ["_id", "iat"]);
+  assert.equal(decoded.isAdmin, false);
+  assert.deepEqual(Object.keys(decoded).sort(), ["_id", "iat", "isAdmin"]);
 }
 
 // Exercise real HTTP handlers and bcrypt without connecting to MongoDB.
@@ -72,7 +72,9 @@ test("Authentication returns a signed JWT for a matching password hash (mocked d
   const request = await startMockApp(t);
   const password = await bcrypt.hash(payload.password, 4);
   const userId = "507f1f77bcf86cd799439011";
-  User.findOne.mock.mockImplementationOnce(async () => ({ _id: userId, email: payload.email, password }));
+  User.findOne.mock.mockImplementationOnce(async () => new User({
+    _id: userId, email: payload.email, password, isAdmin: false,
+  }));
   const response = await request(payload);
   assert.equal(response.status, 200);
   assertAuthToken(await response.text(), userId);
@@ -82,7 +84,9 @@ test("Authentication uses validated and normalized input (mocked database, real 
   const request = await startMockApp(t);
   const password = await bcrypt.hash(payload.password, 4);
   const userId = "507f1f77bcf86cd799439011";
-  User.findOne.mock.mockImplementationOnce(async () => ({ _id: userId, email: payload.email, password }));
+  User.findOne.mock.mockImplementationOnce(async () => new User({
+    _id: userId, email: payload.email, password, isAdmin: false,
+  }));
   const response = await request({ email: "  mosh@example.com  ", password: "  test-password  " });
   assert.equal(response.status, 200);
   assertAuthToken(await response.text(), userId);
@@ -97,7 +101,7 @@ test("Registered password hashes work for login (mocked database, real bcrypt)",
     savedUser = this;
     return this;
   });
-  const registration = await request({ name: "Mosh", ...payload }, "/api/users");
+  const registration = await request({ name: "Mosh", ...payload, isAdmin: false }, "/api/users");
   assert.equal(registration.status, 200);
   assert.equal(Object.hasOwn(await registration.json(), "password"), false);
   assert.notEqual(savedUser.password, payload.password);
@@ -109,7 +113,7 @@ test("Registered password hashes work for login (mocked database, real bcrypt)",
 
 test("Authentication forwards lookup and comparison errors without leaking details (mocked database)", async (t) => {
   const request = await startMockApp(t);
-  t.mock.method(console, "error", () => {});
+  t.mock.method(winston, "error", () => {});
   const fail = async () => { throw new Error("Private authentication details"); };
   User.findOne.mock.mockImplementationOnce(fail);
   const lookupFailure = await request(payload);

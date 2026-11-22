@@ -4,6 +4,7 @@ const router = express.Router();
 const auth = require("../middleware/auth");
 const admin = require("../middleware/admin");
 const { Genre, validateGenre } = require("../models/genre");
+const validateObjectId = require("../middleware/validateObjectId");
 
 router.param("id", (req, res, next, id) => {
   if (!mongoose.isObjectIdOrHexString(id)) {

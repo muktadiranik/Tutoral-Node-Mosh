@@ -34,7 +34,7 @@ function runStartup(t, preload) {
   return { directory, result };
 }
 
-test("Vidly logs route errors without process handlers or MongoDB logging on import (mocked database)", (t) => {
+test("Vidly forwards route errors to Winston without configuring transports on import (mocked database)", (t) => {
   const directory = temporaryDirectory(t);
   const message = "Simulated route failure for logging regression test";
   const result = spawnSync(process.execPath, ["-e", `
@@ -51,9 +51,12 @@ test("Vidly logs route errors without process handlers or MongoDB logging on imp
     const rejectionListeners = process.listenerCount('unhandledRejection');
     const { Genre } = require(${JSON.stringify(require.resolve("../vidly/models/genre"))});
     Genre.findById = async () => { throw new Error(${JSON.stringify(message)}); };
+    const entries = [];
+    winston.error = (...args) => entries.push(args);
     const app = require(${JSON.stringify(require.resolve("../vidly"))});
     assert.equal(process.listenerCount('uncaughtException'), exceptionListeners);
     assert.equal(process.listenerCount('unhandledRejection'), rejectionListeners);
+    assert.equal(winston.default.transports.length, 0);
 
     (async () => {
       const server = app.listen(0, '127.0.0.1');
@@ -65,6 +68,9 @@ test("Vidly logs route errors without process handlers or MongoDB logging on imp
         );
         assert.equal(response.status, 500);
         assert.equal(await response.text(), 'An unexpected error occurred');
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0][0], ${JSON.stringify(message)});
+        assert.ok(entries[0][1].stack.startsWith('Error: ' + ${JSON.stringify(message)}));
       } finally {
         await new Promise((resolve, reject) => {
           server.close((error) => error ? reject(error) : resolve());
@@ -83,12 +89,7 @@ test("Vidly logs route errors without process handlers or MongoDB logging on imp
 
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
-  const entries = fs.readFileSync(path.join(directory, "logfile.log"), "utf8")
-    .trim().split(/\r?\n/).map((line) => JSON.parse(line));
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0].level, "error");
-  assert.equal(entries[0].message, message);
-  assert.ok(entries[0].stack.startsWith(`Error: ${message}`));
+  assert.equal(fs.existsSync(path.join(directory, "logfile.log")), false);
 });
 
 for (const { event, filename, trigger } of [
@@ -129,12 +130,13 @@ test("Vidly attaches MongoDB logging only after connecting and reuses the app cl
     const mongoose = require(${JSON.stringify(require.resolve("mongoose"))});
     const winston = require(${JSON.stringify(require.resolve("winston"))});
     const express = require(${JSON.stringify(require.resolve("express"))});
+    const config = require(${JSON.stringify(require.resolve("config"))});
     require(${JSON.stringify(require.resolve("winston-mongodb"))});
     const client = {};
     let connected = false;
     let transportCreated = false;
     mongoose.connect = async (uri) => {
-      assert.equal(uri, process.env.MONGODB_URI);
+      assert.equal(uri, config.get("database"));
       connected = true;
       return mongoose;
     };

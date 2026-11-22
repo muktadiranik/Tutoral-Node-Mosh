@@ -14,7 +14,22 @@ npm start
 - `npm run seed:customers`: insert 10 sample customers into MongoDB (optional).
 - `npm run seed:movies`: insert 10 sample movies using existing genres (optional).
 - `npm run seed:rentals`: insert 10 sample rental records without changing stock (optional).
-- `npm test`: check imports, validation, CRUD, shared data, and page rendering.
+- `npm test`: run the dedicated Vidly Jest suite once.
+- `npm run test:watch`: watch files and rerun only the Vidly Jest suite.
+- `npm run test:all`: run the Node, mocked Vidly Jest, and MongoDB integration suites.
+- `npm run test:node`: check imports, validation, CRUD, shared data, and page rendering; the genre tests require MongoDB.
+- `npm run test:vidly`: run the dedicated Vidly Jest suite without a real MongoDB server.
+- `npm run test:vidly:coverage`: run that suite and write coverage to `coverage/vidly/`.
+- `npm run test:integration`: run Vidly HTTP and persistence tests against real MongoDB.
+- `npm run test:integration:watch`: watch and rerun the real integration tests.
+- `npm run test:integration:coverage`: write integration coverage to `coverage/vidly-integration/`.
+
+Integration tests require MongoDB, but do not require a running Vidly server.
+They create isolated temporary databases and remove them afterward. See
+[Integration tests](vidly/tests/integration/README.md) for setup and safety details.
+
+See [Vidly Jest tests](vidly/tests/README.md) for coverage scope, mock boundaries,
+and known application limitations covered by current-behavior assertions.
 
 Vidly requires a JWT signing key. In **PowerShell**, generate a random key and
 start the app from this directory in the same terminal:

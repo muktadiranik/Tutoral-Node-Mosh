@@ -2,6 +2,8 @@ const assert = require("node:assert/strict");
 const { once } = require("node:events");
 const test = require("node:test");
 const mongoose = require("mongoose");
+const winston = require("winston");
+const { token } = require("../test-support/vidly");
 const { Rental, validate } = require("../vidly/models/rental");
 const { Customer } = require("../vidly/models/customer");
 const { Movie } = require("../vidly/models/movie");
@@ -23,6 +25,7 @@ async function startMockApp(t) {
     return [String(rental._id), rental];
   }));
   const state = { stock: 2, rentals, operations: [] };
+  t.mock.method(winston, "error", () => {});
   t.mock.method(mongoose.connection, "transaction", () => {
     throw new Error("Transactions are unavailable on standalone MongoDB");
   });
@@ -67,11 +70,15 @@ async function startMockApp(t) {
     server.close((err) => err ? reject(err) : resolve());
   }));
   await once(server, "listening");
+  const authToken = token();
   const request = (method, endpoint = "/api/rentals", body) => fetch(
     `http://127.0.0.1:${server.address().port}${endpoint}`,
     {
       method,
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      headers: {
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        "x-auth-token": authToken,
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(5000),
     },
@@ -214,7 +221,6 @@ test("Rental HTTP validates snapshots before changing stock (mocked database)", 
 
 test("Rental HTTP restores stock when saving fails (mocked database)", async (t) => {
   const { request, state, payload } = await startMockApp(t);
-  const log = t.mock.method(console, "error", () => {});
   Rental.prototype.save.mock.mockImplementationOnce(async () => {
     throw new Error("Private save details");
   });
@@ -223,7 +229,7 @@ test("Rental HTTP restores stock when saving fails (mocked database)", async (t)
   assert.equal(await response.text(), "An unexpected error occurred");
   assert.equal(state.stock, 2);
   assert.equal(state.rentals.size, 2);
-  assert.equal(log.mock.callCount(), 1);
+  assert.equal(winston.error.mock.callCount(), 1);
   assert.deepEqual(state.operations, ["decrement", "restore"]);
 });
 
@@ -245,10 +251,12 @@ test("Rental HTTP logs failed compensation and preserves the save error (mocked 
   assert.equal(state.stock, 1);
   assert.equal(state.rentals.size, 2);
   assert.deepEqual(state.operations, ["decrement"]);
-  assert.equal(log.mock.callCount(), 2);
+  assert.equal(log.mock.callCount(), 1);
   assert.equal(log.mock.calls[0].arguments[1].movieId, String(movie._id));
   assert.equal(log.mock.calls[0].arguments[1].error, restoreError);
-  assert.equal(log.mock.calls[1].arguments[0], saveError);
+  assert.deepEqual(winston.error.mock.calls[0].arguments, [
+    saveError.message, { stack: saveError.stack },
+  ]);
 });
 
 test("Rental HTTP logs a missing movie during stock restoration (mocked database)", async (t) => {
@@ -266,7 +274,8 @@ test("Rental HTTP logs a missing movie during stock restoration (mocked database
   assert.equal(await response.text(), "An unexpected error occurred");
   assert.equal(state.stock, 1);
   assert.equal(state.rentals.size, 2);
-  assert.equal(log.mock.callCount(), 2);
+  assert.equal(log.mock.callCount(), 1);
+  assert.equal(winston.error.mock.callCount(), 1);
   assert.match(log.mock.calls[0].arguments[1].error.message, /Movie not found/);
 });
 

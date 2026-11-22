@@ -7,7 +7,16 @@
     "seed:customers": "node vidly/seed-customers.js",
     "seed:movies": "node vidly/seed-movies.js",
     "seed:rentals": "node vidly/seed-rentals.js",
-    "test": "node --test"
+    "test": "npm run test:vidly --",
+    "test:watch": "npm run test:vidly -- --watchAll --verbose",
+    "test:node": "node --test test/*.test.js",
+    "test:all": "npm run test:node && npm run test:vidly && npm run test:integration",
+    "test:vidly": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.vidly.config.js --runInBand",
+    "test:vidly:watch": "npm run test:watch --",
+    "test:vidly:coverage": "npm run test:vidly -- --coverage",
+    "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.integration.config.js --runInBand",
+    "test:integration:watch": "npm run test:integration -- --watchAll --verbose",
+    "test:integration:coverage": "npm run test:integration -- --coverage"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
@@ -26,6 +35,8 @@
   },
   "devDependencies": {
     "@types/morgan": "^1.9.10",
-    "nodemon": "^3.1.14"
+    "jest": "^30.5.2",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.3.2"
   }
 }

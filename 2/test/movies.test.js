@@ -2,6 +2,8 @@ const assert = require("node:assert/strict");
 const { once } = require("node:events");
 const test = require("node:test");
 const mongoose = require("mongoose");
+const winston = require("winston");
+const { token } = require("../test-support/vidly");
 const { Movie, validate } = require("../vidly/models/movie");
 const { Genre, genreSchema } = require("../vidly/models/genre");
 
@@ -38,7 +40,10 @@ async function startMockApp(t) {
     const original = store.get(String(id));
     if (!original) return null;
 
-    const movie = new Movie({ ...original.toObject(), ...update.$set });
+    // Mongoose strips undefined update values rather than clearing stored fields.
+    const fields = Object.fromEntries(Object.entries(update.$set)
+      .filter(([, value]) => value !== undefined));
+    const movie = new Movie({ ...original.toObject(), ...fields });
     await movie.validate();
     store.set(String(id), movie);
     return movie;
@@ -56,11 +61,15 @@ async function startMockApp(t) {
   }));
   await once(server, "listening");
 
+  const authToken = token();
   const request = (method, endpoint, body) => fetch(
     `http://127.0.0.1:${server.address().port}${endpoint}`,
     {
       method,
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      headers: {
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        "x-auth-token": authToken,
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(5000),
     },
@@ -69,7 +78,6 @@ async function startMockApp(t) {
   const payload = {
     title: "The Matrix",
     genreId: String(genres[0]._id),
-    numberInStock: 10,
     dailyRentalRate: 2.5,
   };
   return { request, store, genres, payload };
@@ -105,15 +113,17 @@ test("Movie schema embeds the shared genre schema and validates its fields offli
 
   const normalized = validate({
     title: "  The Matrix  ", genreId: String(data.genre._id),
-    numberInStock: "10", dailyRentalRate: "2.5",
+    dailyRentalRate: "2.5",
   });
   assert.equal(normalized.error, undefined);
   assert.equal(normalized.value.title, "The Matrix");
-  assert.equal(normalized.value.numberInStock, 10);
+  assert.equal(normalized.value.numberInStock, undefined);
   assert.equal(normalized.value.dailyRentalRate, 2.5);
+  assert.equal(validate({ ...normalized.value, numberInStock: 10 })
+    .error.details[0].message, '"numberInStock" is not allowed');
 });
 
-test("Movie HTTP CRUD returns sorted titles and embedded genres (mocked model)", async (t) => {
+test("Movie HTTP reads, updates, and deletes existing movies (mocked model)", async (t) => {
   const { request, store, genres, payload } = await startMockApp(t);
   const list = await request("GET", "/api/movies");
   assert.equal(list.status, 200);
@@ -124,37 +134,55 @@ test("Movie HTTP CRUD returns sorted titles and embedded genres (mocked model)",
   assert.deepEqual(await first.json(), baseline[0]);
   assert.equal((await request("GET", `/${baseline[0]._id}`)).status, 404);
 
-  const response = await request("POST", "/api/movies", {
-    ...payload, title: "  The Matrix  ", numberInStock: "10", dailyRentalRate: "2.5",
-  });
-  assert.equal(response.status, 201);
-  const created = await response.json();
-  assert.equal(created.title, "The Matrix");
-  assert.deepEqual(created.genre, { _id: String(genres[0]._id), name: genres[0].name });
-  assert.equal(created.numberInStock, 10);
-  assert.equal(created.dailyRentalRate, 2.5);
-  assert.equal(created.genreId, undefined);
-  assert.equal(created.name, undefined);
-  assert.match(created._id, /^[a-f0-9]{24}$/);
-
-  const update = await request("PUT", `/api/movies/${created._id}`, {
+  const id = baseline[0]._id;
+  const update = await request("PUT", `/api/movies/${id}`, {
     ...payload, title: "  Updated Movie  ", genreId: String(genres[1]._id),
-    numberInStock: 0, dailyRentalRate: 0,
+    dailyRentalRate: "0",
   });
   assert.equal(update.status, 200);
   const updated = await update.json();
-  assert.equal(updated._id, created._id);
+  assert.equal(updated._id, id);
   assert.equal(updated.title, "Updated Movie");
   assert.deepEqual(updated.genre, { _id: String(genres[1]._id), name: genres[1].name });
-  assert.equal(updated.numberInStock, 0);
+  assert.equal(updated.numberInStock, baseline[0].numberInStock);
   assert.equal(updated.dailyRentalRate, 0);
-  assert.deepEqual(await (await request("GET", `/api/movies/${created._id}`)).json(), updated);
+  assert.equal(updated.genreId, undefined);
+  assert.equal(updated.name, undefined);
+  assert.deepEqual(Movie.findByIdAndUpdate.mock.calls[0].arguments[1].$set, {
+    title: "Updated Movie",
+    genre: { _id: genres[1]._id, name: genres[1].name },
+    numberInStock: undefined,
+    dailyRentalRate: 0,
+  });
+  assert.deepEqual(await (await request("GET", `/api/movies/${id}`)).json(), updated);
 
-  const deletion = await request("DELETE", `/api/movies/${created._id}`);
+  const deletion = await request("DELETE", `/api/movies/${id}`);
   assert.equal(deletion.status, 200);
   assert.deepEqual(await deletion.json(), updated);
+  assert.equal(store.size, 1);
+  assert.equal((await request("GET", `/api/movies/${id}`)).status, 404);
+});
+
+test("Movie HTTP currently rejects stock writes and cannot create without stock (mocked model)", async (t) => {
+  const { request, store, payload } = await startMockApp(t);
+  const id = store.keys().next().value;
+  for (const method of ["POST", "PUT"]) {
+    const response = await request(method,
+      method === "POST" ? "/api/movies" : `/api/movies/${id}`,
+      { ...payload, numberInStock: 10 });
+    assert.equal(response.status, 400);
+    assert.equal(await response.text(), '"numberInStock" is not allowed');
+  }
+  assert.equal(Genre.findById.mock.callCount(), 0);
+  assert.equal(Movie.create.mock.callCount(), 0);
+  assert.equal(Movie.findByIdAndUpdate.mock.callCount(), 0);
+
+  // Joi accepts the remaining fields, but the real document schema requires stock.
+  const response = await request("POST", "/api/movies", payload);
+  assert.equal(response.status, 400);
+  assert.match(await response.text(), /numberInStock.*required/);
+  assert.equal(Movie.create.mock.callCount(), 1);
   assert.equal(store.size, 2);
-  assert.equal((await request("GET", `/api/movies/${created._id}`)).status, 404);
 });
 
 test("Movie HTTP validation rejects invalid writes before database calls (mocked model)", async (t) => {
@@ -165,7 +193,7 @@ test("Movie HTTP validation rejects invalid writes before database calls (mocked
     { ...payload, title: "    " }, { ...payload, title: "x".repeat(256) },
     { ...payload, title: 12345 }, { ...payload, genreId: undefined },
     { ...payload, genreId: "invalid" }, { ...payload, genreId: "z".repeat(24) },
-    { ...payload, numberInStock: undefined }, { ...payload, numberInStock: -1 },
+    { ...payload, numberInStock: 0 }, { ...payload, numberInStock: -1 },
     { ...payload, numberInStock: 256 }, { ...payload, numberInStock: 1.5 },
     { ...payload, dailyRentalRate: undefined }, { ...payload, dailyRentalRate: -1 },
     { ...payload, dailyRentalRate: 256 }, { ...payload, dailyRentalRate: null },
@@ -224,7 +252,7 @@ test("Movie HTTP rejects malformed and missing movie IDs (mocked model)", async 
 test("Movie HTTP forwards database errors to the existing error handler (mocked model)", async (t) => {
   const { request, store, payload } = await startMockApp(t);
   const id = store.keys().next().value;
-  t.mock.method(console, "error", () => {});
+  t.mock.method(winston, "error", () => {});
   const fail = async () => { throw new Error("Private database details"); };
 
   for (const [model, operation, method, endpoint] of [
